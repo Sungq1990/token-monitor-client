@@ -3,6 +3,7 @@ package main
 import (
 	"embed"
 	"log"
+	"runtime"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -22,18 +23,19 @@ func main() {
 	cfg := app.cfg.Get()
 
 	err = wails.Run(&options.App{
-		Title:            "Token Monitor",
-		Width:            900,
-		Height:           720,
-		MinWidth:         720,
-		MinHeight:        560,
-		StartHidden:      cfg.StartMinimized,
-		HideWindowOnClose: true, // 关窗口不退出，采集继续；托盘/Dock 再打开
-		AssetServer:      &assetserver.Options{Assets: assets},
-		BackgroundColour: &options.RGBA{R: 246, G: 248, B: 250, A: 1},
-		OnStartup:        app.startup,
-		OnShutdown:       app.shutdown,
-		Bind:             []any{app},
+		Title:       "Token Monitor",
+		Width:       900,
+		Height:      720,
+		MinWidth:    720,
+		MinHeight:   560,
+		StartHidden: cfg.StartMinimized,
+		// Windows/Linux：关窗口隐藏到托盘，采集继续；macOS：关窗口正常退出（无托盘）
+		HideWindowOnClose: runtime.GOOS != "darwin",
+		AssetServer:       &assetserver.Options{Assets: assets},
+		BackgroundColour:  &options.RGBA{R: 246, G: 248, B: 250, A: 1},
+		OnStartup:         app.startup,
+		OnShutdown:        app.shutdown,
+		Bind:              []any{app},
 		Windows: &windows.Options{
 			WebviewIsTransparent: false,
 			WindowIsTranslucent:  false,
