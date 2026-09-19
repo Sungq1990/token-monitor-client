@@ -72,7 +72,10 @@ func (a *App) startup(ctx context.Context) {
 	go tray.Run(tray.Actions{
 		Show:  a.ShowWindow,
 		Sync:  a.SyncNow,
-		Panel: func() { wailsRuntime.BrowserOpenURL(ctx, a.cfg.Get().ServerURL) },
+		Panel: func() {
+			// 服务端地址末尾斜杠统一规范化后再拼面板路径
+			wailsRuntime.BrowserOpenURL(ctx, strings.TrimRight(a.cfg.Get().ServerURL, "/")+"/")
+		},
 		Quit:  a.QuitApp,
 	})
 }
