@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+jobs:
+  build-windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.9.2
+      - name: Build
+        run: wails build -platform windows/amd64 -trimpath -ldflags="-s -w"
+      - name: Pack
+        run: |
+          cd build/bin
+          zip -q ../../token-monitor-windows-amd64.zip token-monitor.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: token-monitor-windows-amd64
+          path: token-monitor-windows-amd64.zip
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.9.2
+      - name: Build (universal: Intel + Apple Silicon)
+        run: wails build -platform darwin/universal -trimpath -ldflags="-s -w"
+      - name: Pack
+        run: |
+          cd build/bin
+          zip -qry ../../token-monitor-macos-universal.zip token-monitor.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: token-monitor-macos-universal
+          path: token-monitor-macos-universal.zip
+
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            token-monitor-windows-amd64.zip
+            token-monitor-macos-universal.zip
