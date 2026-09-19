@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>Token Monitor</title><link rel="icon" type="image/png" href="favicon.png"><link rel="stylesheet" href="app.css"><script src="app.js" defer></script></head>
+<body>
+<div id="splash">
+  <div class="splash-mark"><i></i><i></i><i></i><i></i></div>
+  <div class="splash-word">Token&nbsp;Monitor</div>
+  <div class="splash-sub">AI&nbsp;AGENT&nbsp;ANALYTICS</div>
+  <div class="splash-bar"><span></span></div>
+</div>
+<header class="top">
+  <div class="brand"><div class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 15V9m5 10V5m5 12V7m5 7v-4"/></svg></div><div><strong>Token Monitor</strong><small>本机采集</small></div></div>
+  <div class="top-status" id="connStatus"><i class="status-dot"></i><span id="connText">正在启动…</span></div>
+  <div class="top-actions"><button class="btn" id="btnSync">立即同步</button><button class="btn" id="btnOpenPanel">打开面板</button></div>
+</header>
+<div id="netBanner" class="netbanner"></div>
+
+<nav class="tabs" role="tablist">
+  <button class="tab active" data-tab="server" role="tab" aria-selected="true">服务端与设备</button>
+  <button class="tab" data-tab="agents" role="tab" aria-selected="false">Agent 路径</button>
+  <button class="tab" data-tab="pricing" role="tab" aria-selected="false">模型单价</button>
+  <button class="tab" data-tab="log" role="tab" aria-selected="false">运行状态</button>
+</nav>
+
+<main>
+<div id="err" role="alert"></div>
+
+<!-- 服务端与设备 -->
+<section class="pane active" data-pane="server">
+  <div class="card">
+    <h3>服务端</h3>
+    <div class="row"><label for="serverUrl">服务端地址</label><input id="serverUrl" placeholder="http://192.168.1.10:8765" spellcheck="false"><button class="btn" id="btnTest">测试连接</button></div>
+    <div class="hint" id="testMsg">填服务端部署地址（含端口）。保存后本机会自动注册设备并开始上报。</div>
+  </div>
+  <div class="card">
+    <h3>本机设备</h3>
+    <div class="row"><label for="deviceId">设备标识</label><input id="deviceId" class="mono" spellcheck="false" maxlength="64"><button class="btn" id="btnNewId" title="重新生成一个随机标识">重新生成</button></div>
+    <div class="hint">服务端用它区分不同电脑，首次启动自动生成。想沿用另一台机器/旧安装的历史数据，把标识改成一样即可；修改后会清空本地游标并全量重传（服务端按 message_id 去重，不会重复累计）。</div>
+    <div class="row"><label for="deviceName">设备名称</label><input id="deviceName" placeholder="例如：办公室台式机" maxlength="128"></div>
+    <div class="hint">面板里显示的名字，随便填；留空显示主机名。</div>
+  </div>
+  <div class="card">
+    <h3>采集频率</h3>
+    <div class="row"><label for="interval">扫描间隔</label><input id="interval" type="number" min="1" max="1440" style="width:90px"><span>分钟</span></div>
+    <div class="row"><label for="rescan">回扫窗口</label><input id="rescan" type="number" min="60" max="864000" style="width:110px"><span>秒</span></div>
+    <div class="hint">回扫窗口：SQLite 类数据源（OpenCode / ZCode）每次从游标往前多扫这么久，用来补齐迟写入的记录；默认 7200。</div>
+    <div class="row"><label><input type="checkbox" id="startMinimized"> 启动时不显示窗口（后台采集）</label></div>
+  </div>
+  <div class="foot"><button class="btn primary" id="btnSave">保存设置</button><span class="hint" id="saveMsg"></span><span class="hint mono" style="margin-left:auto">配置保存在服务端，设备间共用</span></div>
+</section>
+
+<!-- Agent 路径 -->
+<section class="pane" data-pane="agents" hidden>
+  <div class="notice">Agent 名称自填，不限定名单。名称等于 claude / codex / opencode / zcode 时有对应解析器；其他名称可以先保存路径，标记「待适配」，暂不采集。路径在<b>本机</b>解释，支持 <span class="mono">~</span> 和环境变量；Windows 上读 WSL 数据可填 <span class="mono">\\wsl.localhost\Ubuntu\home\你\.claude</span>。</div>
+  <div class="agent-head"><span class="hint">只上传解析出的 Token 计数与会话标题，不上传文件内容。</span><button class="btn" id="btnAddAgent">＋ 新增 Agent 配置</button></div>
+  <div id="agentList"></div>
+  <div class="foot"><button class="btn primary" id="btnSaveAgents">保存路径配置</button><span class="hint" id="agentsMsg"></span></div>
+</section>
+
+<!-- 模型单价 -->
+<section class="pane" data-pane="pricing" hidden>
+  <div class="notice">单价存在<b>服务端</b>，全局生效（¥ / 百万 Tokens，默认 0）。配置后费用 = 各类 Tokens × 单价；未配置的模型沿用 Agent 自报费用。列表是服务端已见过的所有模型（含其他设备）。</div>
+  <div id="pricingList"><div class="hint">正在加载…</div></div>
+  <div class="foot"><button class="btn primary" id="btnSavePricing">保存全部单价</button><button class="btn" id="btnReloadPricing">重新加载</button><span class="hint" id="pricingMsg"></span></div>
+</section>
+
+<!-- 运行状态 -->
+<section class="pane" data-pane="log" hidden>
+  <div class="cards3">
+    <div class="stat"><span>上次采集</span><b id="stLastRun">—</b></div>
+    <div class="stat"><span>上次成功</span><b id="stLastOk">—</b></div>
+    <div class="stat"><span>下次采集</span><b id="stNext">—</b></div>
+    <div class="stat"><span>本次运行累计上报</span><b id="stTotal">0</b></div>
+  </div>
+  <div class="card"><h3>各 Agent 状态</h3><table id="agentStatus"><thead><tr><th>Agent</th><th>状态</th><th>数据源</th><th>上轮上报</th><th>最近成功</th><th></th></tr></thead><tbody></tbody></table></div>
+  <div class="card"><h3>日志</h3><pre id="logBox">（暂无）</pre></div>
+</section>
+</main>
+</body></html>

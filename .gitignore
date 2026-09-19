@@ -1,0 +1,9 @@
+build/bin/
+build/darwin/
+build/linux/
+frontend/wailsjs/
+frontend/node_modules/
+/tokenmon-agent
+/dist/
+*.log
+.DS_Store

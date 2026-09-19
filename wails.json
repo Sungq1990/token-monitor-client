@@ -1,0 +1,21 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "token-monitor",
+  "outputfilename": "token-monitor",
+  "frontend:dir": "frontend",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "auto",
+  "wailsjsdir": "./frontend",
+  "author": {
+    "name": "token-monitor"
+  },
+  "info": {
+    "companyName": "token-monitor",
+    "productName": "Token Monitor",
+    "productVersion": "1.0.0",
+    "copyright": "token-monitor",
+    "comments": "采集本机 AI Coding Agent 的 Token 用量并上报到服务端"
+  }
+}
