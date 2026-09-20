@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -26,6 +27,8 @@ type App struct {
 	cfg    *config.Store
 	cur    *cursors.File
 	runner *agent.Runner
+	// dialogOpen 断线弹窗是否正在显示（防止堆叠）
+	dialogOpen atomic.Bool
 }
 
 func NewApp() (*App, error) {
@@ -51,12 +54,20 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.runner.OnServerDown = func(err error) {
 		wailsRuntime.EventsEmit(ctx, "serverdown", err.Error())
-		// 本机弹窗提醒：每次断线只弹一次，恢复后页面提示
-		_, _ = wailsRuntime.MessageDialog(ctx, wailsRuntime.MessageDialogOptions{
-			Type:    wailsRuntime.ErrorDialog,
-			Title:   "Token Monitor：服务端连接断开",
-			Message: "无法连接服务端：" + err.Error() + "\n\n采集会自动重试，恢复后页面会提示。",
-		})
+		// 本机弹窗提醒：每次断线只弹一次，恢复后页面提示。
+		// Windows 下 MessageDialog 是在调用方 goroutine 里同步 MessageBox 直到用户点掉，
+		// 不能阻塞心跳循环，故放到独立 goroutine；同一时间只保留一个弹窗，避免长期无人值守时堆叠。
+		if !a.dialogOpen.CompareAndSwap(false, true) {
+			return
+		}
+		go func() {
+			defer a.dialogOpen.Store(false)
+			_, _ = wailsRuntime.MessageDialog(ctx, wailsRuntime.MessageDialogOptions{
+				Type:    wailsRuntime.ErrorDialog,
+				Title:   "Token Monitor：服务端连接断开",
+				Message: "无法连接服务端：" + err.Error() + "\n\n采集会自动重试，恢复后页面会提示。",
+			})
+		}()
 	}
 	a.runner.OnServerUp = func() {
 		wailsRuntime.EventsEmit(ctx, "serverup")
