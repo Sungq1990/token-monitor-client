@@ -113,13 +113,19 @@ func (r *Runner) SyncNow() {
 
 func (r *Runner) Stop() { r.once.Do(func() { close(r.stop) }) }
 
+// heartbeatFailThreshold 连续探测失败多少次才判定为「断线」并走弹窗/报错机制，
+// 避免偶发一次超时就打扰用户。
+const heartbeatFailThreshold = 3
+
 // StartHeartbeat 每分钟探测一次服务端健康（GET /api/health）：
-// 正常则顺带发一次心跳刷新服务端 last_seen；探测失败/恢复时触发 OnServerDown / OnServerUp。
+// 正常则顺带发一次心跳刷新服务端 last_seen；连续失败达到 heartbeatFailThreshold 次才触发
+// OnServerDown（状态置为不可达 + 弹窗），恢复时触发 OnServerUp。
 func (r *Runner) StartHeartbeat() {
 	go func() {
 		t := time.NewTicker(time.Minute)
 		defer t.Stop()
 		wasDown := false
+		failCount := 0
 		for {
 			select {
 			case <-r.stop:
@@ -136,19 +142,28 @@ func (r *Runner) StartHeartbeat() {
 					}
 				}
 				cancel()
-				down := err != nil
-				if down {
-					r.update(func(s *Status) { s.Connected = false; s.ServerError = err.Error() })
-				} else {
+
+				if err == nil {
+					failCount = 0
 					r.update(func(s *Status) { s.Connected = true; s.ServerError = "" })
+					if wasDown && r.OnServerUp != nil {
+						r.OnServerUp()
+					}
+					wasDown = false
+					continue
 				}
-				if down && !wasDown && r.OnServerDown != nil {
+
+				failCount++
+				if failCount < heartbeatFailThreshold {
+					// 未达阈值：只记日志，不改变连接状态、不弹窗
+					r.Logf("服务端健康检查失败（第 %d/%d 次，达到 %d 次后提醒）: %v", failCount, heartbeatFailThreshold, heartbeatFailThreshold, err)
+					continue
+				}
+				r.update(func(s *Status) { s.Connected = false; s.ServerError = err.Error() })
+				if !wasDown && r.OnServerDown != nil {
 					r.OnServerDown(err)
 				}
-				if !down && wasDown && r.OnServerUp != nil {
-					r.OnServerUp()
-				}
-				wasDown = down
+				wasDown = true
 			}
 		}
 	}()

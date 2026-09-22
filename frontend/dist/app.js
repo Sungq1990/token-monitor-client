@@ -241,7 +241,8 @@ function renderStatus(s){
   $("stLastRun").textContent = s.last_run_at||"—"; $("stLastOk").textContent = s.last_success_at||"—"; $("stNext").textContent = s.next_run_at||"—"; $("stTotal").textContent = (s.total_uploaded||0).toLocaleString();
   const rows = Object.values(s.agents||{}).sort((a,b)=>a.agent<b.agent?-1:1);
   document.querySelector("#agentStatus tbody").innerHTML = rows.map(a=>`<tr><td>${esc(AGENT_LABEL[a.agent]||a.agent)}</td><td>${!a.enabled?'<span class="muted">已停用</span>':!a.supported?'<span class="muted">待适配</span>':a.error?`<span class="bad" title="${esc(a.error)}">错误</span>`:'<span class="ok">正常</span>'}</td><td title="${esc((a.sources||[]).join("\n"))}">${(a.sources||[]).length}</td><td>${a.usage_rows||0}</td><td>${a.last_sync_at||"—"}</td><td><button class="btn small" data-reset="${esc(a.agent)}" title="清空游标，下轮全量重扫（服务端去重，不会重复累计）">重扫</button></td></tr>`).join("") || '<tr><td colspan="6" class="muted">尚未运行</td></tr>';
-  $("logBox").textContent = (s.log||[]).slice(-200).join("\n") || "（暂无）";
+  // 按时间倒序：最新一条在最上面
+  $("logBox").textContent = (s.log||[]).slice(-200).reverse().join("\n") || "（暂无）";
 }
 document.querySelector("#agentStatus").addEventListener("click", async e=>{
   const b=e.target.closest("[data-reset]"); if(!b) return;
