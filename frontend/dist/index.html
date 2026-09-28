@@ -50,8 +50,8 @@
 
 <!-- Agent 路径 -->
 <section class="pane" data-pane="agents" hidden>
-  <div class="notice">Agent 名称自填，不限定名单。名称等于 claude / codex / opencode / zcode 时有对应解析器；其他名称可以先保存路径，标记「待适配」，暂不采集。路径在<b>本机</b>解释，支持 <span class="mono">~</span> 和环境变量；Windows 上读 WSL 数据可填 <span class="mono">\\wsl.localhost\Ubuntu\home\你\.claude</span>。</div>
-  <div class="agent-head"><span class="hint">只上传解析出的 Token 计数与会话标题，不上传文件内容。</span><button class="btn" id="btnAddAgent">＋ 新增 Agent 配置</button></div>
+  <div class="notice">Agent 名称自填，不限定名单。名称等于 claude / codex / opencode / zcode 时有对应解析器；其他名称可以先保存路径，标记「待适配」，暂不采集。路径在<b>本机</b>解释，支持 <span class="mono">~</span> 和环境变量；Windows 上读 WSL 数据可填 <span class="mono">\\wsl.localhost\Ubuntu\home\你\.claude</span>。点「自动扫描」可一键发现宿主机与 WSL 里已装 Agent 的数据目录并直接保存。</div>
+  <div class="agent-head"><span class="hint">只上传解析出的 Token 计数与会话标题，不上传文件内容。</span><span><button class="btn" id="btnScanAgents">🔍 自动扫描</button><button class="btn" id="btnAddAgent">＋ 新增 Agent 配置</button></span></div>
   <div id="agentList"></div>
   <div class="foot"><button class="btn primary" id="btnSaveAgents">保存路径配置</button><span class="hint" id="agentsMsg"></span></div>
 </section>

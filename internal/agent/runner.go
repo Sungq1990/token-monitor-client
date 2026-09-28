@@ -18,7 +18,8 @@ import (
 	"token-monitor-client/internal/cursors"
 )
 
-const Version = "1.0.0"
+// Version 客户端版本：CI 打 tag 发布时经 ldflags -X 注入为 tag 名，本地构建显示为 dev。
+var Version = "dev"
 
 // AgentStatus 每个 agent 上一轮采集的结果（心跳时上报服务端 + 设置页展示）
 type AgentStatus struct {
@@ -103,6 +104,22 @@ func (r *Runner) update(f func(*Status)) {
 	}
 }
 
+// tryBeginSync 防重入：检查与置位在同一临界区内完成，并发调用只有一个能进入。
+func (r *Runner) tryBeginSync() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.st.Syncing {
+		return false
+	}
+	r.st.Syncing = true
+	s := r.st
+	cb := r.OnChange
+	if cb != nil {
+		defer func() { cb(s) }()
+	}
+	return true
+}
+
 // SyncNow 立即触发一轮采集
 func (r *Runner) SyncNow() {
 	select {
@@ -172,6 +189,9 @@ func (r *Runner) StartHeartbeat() {
 // Run 主循环：启动即跑一轮，之后按配置间隔；配置改动后 SyncNow 会重新计算间隔。
 func (r *Runner) Run() {
 	r.update(func(s *Status) { s.Running = true })
+	if r.cur.Recovered {
+		r.Logf("游标文件损坏，已备份为 cursors.json.corrupt-*；本次全量重扫（服务端按 message_id 去重，不会重复累计）")
+	}
 	first := true
 	for {
 		if !first {
@@ -249,13 +269,10 @@ func (r *Runner) syncConfig(ctx context.Context, c *client.Client) {
 
 // RunOnce 跑一轮：逐 agent 采集 → 上报 → 成功后提交游标；最后心跳。
 func (r *Runner) RunOnce() {
-	r.mu.Lock()
-	if r.st.Syncing {
-		r.mu.Unlock()
+	if !r.tryBeginSync() {
 		return
 	}
-	r.mu.Unlock()
-	r.update(func(s *Status) { s.Syncing = true; s.LastRunAt = time.Now().Format("15:04:05") })
+	r.update(func(s *Status) { s.LastRunAt = time.Now().Format("15:04:05") })
 	defer r.update(func(s *Status) { s.Syncing = false })
 
 	cfg := r.cfg.Get()
@@ -263,9 +280,8 @@ func (r *Runner) RunOnce() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	allOK := true
-	var resMu sync.Mutex
 	statuses := map[string]AgentStatus{}
+	var resMu sync.Mutex
 	now := time.Now().Format("2006-01-02 15:04:05")
 
 	// 各 agent 并行采集上报：互不依赖，网络盘/大库的慢源不再拖累其他 agent
@@ -305,9 +321,6 @@ func (r *Runner) RunOnce() {
 				resp, err := c.Ingest(ctx, client.IngestReq{DeviceID: cfg.DeviceID, Agent: ac.Agent, Batches: part})
 				if err != nil {
 					st.Error = err.Error()
-					resMu.Lock()
-					allOK = false
-					resMu.Unlock()
 					r.Logf("%s: 上报失败（游标不推进，下轮重试）: %v", ac.Agent, err)
 					r.update(func(s *Status) { s.Connected = false; s.ServerError = err.Error() })
 					break
@@ -316,6 +329,10 @@ func (r *Runner) RunOnce() {
 					if b.Cursor != "" {
 						r.cur.Set(ac.Agent, b.Source, b.Cursor)
 					}
+				}
+				// 逐块落盘：中途崩溃最多丢本块游标，已成功的块不会整轮重传
+				if err := r.cur.Flush(); err != nil {
+					r.Logf("保存游标失败: %v", err)
 				}
 				st.UsageRows += resp.UsageRows
 				st.LastSyncAt = now
@@ -335,6 +352,14 @@ func (r *Runner) RunOnce() {
 	}
 	collector.CleanupSnapshots()
 
+	// 汇总本轮成败：任一 agent 上报出错或心跳失败，都不推进 LastSuccessAt
+	allOK := true
+	for _, st := range statuses {
+		if st.Error != "" {
+			allOK = false
+			break
+		}
+	}
 	// 心跳：带上各 agent 状态
 	if err := c.Heartbeat(ctx, r.deviceInfo(cfg, statuses)); err != nil {
 		allOK = false

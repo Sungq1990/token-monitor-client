@@ -179,6 +179,10 @@ func (a *App) TestServer(url string) (client.Health, error) {
 	return client.New(url).Health(ctx)
 }
 
+// DetectAgents 自动扫描本机已装 Agent 的数据目录（宿主机 + Windows 下的 WSL 发行版），
+// 供设置页「自动扫描」勾选导入。
+func (a *App) DetectAgents() []collector.Detection { return collector.Detect() }
+
 // ProbePaths 检查路径是否存在、某 agent 类型下能发现多少数据源
 func (a *App) ProbePaths(kind string, ac config.AgentConfig) map[string]any {
 	out := map[string]any{"exists": map[string]bool{}, "sources": []string{}, "supported": collector.Supported(kind)}

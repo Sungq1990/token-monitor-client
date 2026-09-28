@@ -17,7 +17,7 @@ jobs:
       - name: Install Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.11.0
       - name: Build
-        run: wails build -platform windows/amd64 -trimpath -ldflags="-s -w"
+        run: wails build -platform windows/amd64 -trimpath -ldflags="-s -w -X token-monitor-client/internal/agent.Version=${{ github.ref_name }}"
       - name: Pack
         run: |
           cd build/bin
@@ -37,14 +37,14 @@ jobs:
       - name: Install Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.11.0
       - name: Build Apple Silicon (arm64)
-        run: wails build -platform darwin/arm64 -trimpath -ldflags="-s -w"
+        run: wails build -platform darwin/arm64 -trimpath -ldflags="-s -w -X token-monitor-client/internal/agent.Version=${{ github.ref_name }}"
       - name: Pack arm64
         run: |
           cd build/bin
           zip -qry ../../token-monitor-macos-arm64.zip token-monitor.app
           rm -rf token-monitor.app
       - name: Build Intel (amd64)
-        run: wails build -platform darwin/amd64 -trimpath -ldflags="-s -w"
+        run: wails build -platform darwin/amd64 -trimpath -ldflags="-s -w -X token-monitor-client/internal/agent.Version=${{ github.ref_name }}"
       - name: Pack amd64
         run: |
           cd build/bin

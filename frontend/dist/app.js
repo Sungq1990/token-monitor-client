@@ -111,7 +111,7 @@ function loadAgents(){
   agentDrafts.forEach((_,i)=>probe(i));
 }
 async function probe(i, btn){
-  const a = agentDrafts[i]; if(!a || a.fresh) return;
+  const a = agentDrafts[i]; if(!a || !a.agent) return;
   const label = AGENT_LABEL[a.agent]||a.agent;
   if(btn) setBusy(btn, true, "检测中…");
   let box = document.querySelector(`[data-probe="${i}"]`);
@@ -176,14 +176,23 @@ alist.addEventListener("click", async e=>{
   }
   renderAgents(); msg("agentsMsg","有未保存的修改");
 });
+/* ---- 自动扫描 Agent 数据目录 ---- */
+let scanning = false;
+
+/* 保存当前 drafts（校验、推送服务端、立即采集）。btnSaveAgents 与自动扫描共用。 */
+async function saveAgentsDrafts(){
+  const agents = agentDrafts.map(({fresh,...a})=>({agent:a.agent.trim(), enabled:!!a.enabled, paths:a.paths.map(p=>p.trim()).filter(Boolean), projects_dir:(a.projects_dir||"").trim(), file_glob:(a.file_glob||"").trim(), db_file:(a.db_file||"").trim()}));
+  const c = collectServer(); c.agents = agents;
+  await API().SaveConfig(c);
+  cfg = await API().GetConfig(); loadAgents();
+  return agents;
+}
+
 $("btnSaveAgents").onclick = async () => {
   if(agentDrafts===null) return;
   const b=$("btnSaveAgents"); setBusy(b,true,"正在保存并同步…");
-  const agents = agentDrafts.map(({fresh,...a})=>({agent:a.agent.trim(), enabled:!!a.enabled, paths:a.paths.map(p=>p.trim()).filter(Boolean), projects_dir:(a.projects_dir||"").trim(), file_glob:(a.file_glob||"").trim(), db_file:(a.db_file||"").trim()}));
   try{
-    const c = collectServer(); c.agents = agents;
-    await API().SaveConfig(c);
-    cfg = await API().GetConfig(); loadAgents();
+    const agents = await saveAgentsDrafts();
     const unsupported = agents.filter(a=>a.enabled && !(info?.collectors||[]).some(s=>s.key===a.agent)).map(a=>a.agent);
     const m = unsupported.length ? "已保存；以下 Agent 待适配，暂不采集："+unsupported.join("、") : "已保存，正在按新配置采集。";
     msg("agentsMsg", m, unsupported.length?"":"ok");
@@ -191,6 +200,41 @@ $("btnSaveAgents").onclick = async () => {
   }catch(e){ msg("agentsMsg", e?.message||String(e), "bad"); setNet("bad","保存失败："+(e?.message||e)); }
   finally{ setBusy(b,false); }
 };
+
+/* 自动扫描：发现的新数据目录直接并入配置并保存，已有的跳过。 */
+async function scanAgents(){
+  if(agentDrafts===null) loadAgents();
+  if(scanning) return; scanning=true;
+  const b=$("btnScanAgents"); setBusy(b,true,"扫描中…");
+  msg("agentsMsg","正在扫描宿主机与 WSL 的数据目录…");
+  try{
+    const found = await API().DetectAgents() || [];
+    let newAgents=0, newPaths=0;
+    const labels=[];
+    found.forEach(d=>(d.paths||[]).forEach(p=>{
+      // 这条路径已在同名 Agent 配置里：跳过，不重复列
+      if(agentDrafts.some(a=>(a.agent||"").toLowerCase()===d.key && a.paths.includes(p))) return;
+      let a = agentDrafts.find(x=>(x.agent||"").toLowerCase()===d.key);
+      if(!a){ a = {agent:d.key, enabled:true, paths:[], projects_dir:"", file_glob:"", db_file:"", fresh:true}; agentDrafts.push(a); newAgents++; }
+      a.paths.push(p); newPaths++;
+      if(!labels.includes(d.label||d.key)) labels.push(d.label||d.key);
+    }));
+    if(newPaths){
+      const agents = await saveAgentsDrafts();
+      const unsupported = agents.filter(a=>a.enabled && !(info?.collectors||[]).some(s=>s.key===a.agent)).map(a=>a.agent);
+      msg("agentsMsg", "扫描完成：已自动填入并保存 "+(unsupported.length?"（其中待适配："+unsupported.join("、")+"，暂不采集）":"")+"，正在按新配置采集。", "ok");
+      setNet("ok",`扫描完成：${labels.join("、")} 新增 ${newPaths} 条路径（${newAgents} 个新 Agent），已保存并同步`);
+    } else if(found.length){
+      msg("agentsMsg","扫描完成：发现的数据目录都已在配置中，无需更新。","ok");
+      setNet("ok","扫描完成：发现的数据目录都已在配置中 ✓");
+    } else {
+      msg("agentsMsg","扫描完成：未发现任何 Agent 数据目录。Agent 可能尚未产生记录，或装在自定义位置——请手动添加。","bad");
+      setNet("bad","扫描完成：未发现任何 Agent 数据目录");
+    }
+  }catch(e){ msg("agentsMsg", "扫描失败："+(e?.message||e), "bad"); setNet("bad","扫描失败："+(e?.message||e)); }
+  finally{ setBusy(b,false); scanning=false; }
+}
+$("btnScanAgents").onclick = scanAgents;
 
 /* ---- 模型单价 ---- */
 async function loadPricing(){
