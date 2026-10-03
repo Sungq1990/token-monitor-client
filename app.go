@@ -213,11 +213,13 @@ func (a *App) OpenURL(url string) { wailsRuntime.BrowserOpenURL(a.ctx, url) }
 
 // ---- 单价：读写服务端 ----
 
+// GetPricing 只取本设备上报过的模型（其他设备的历史模型不进列表），
+// 已配置但本机从未用过的模型也不展示，避免列表越积越多。
 func (a *App) GetPricing() ([]client.PricingItem, error) {
 	cfg := a.cfg.Get()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	items, err := client.New(cfg.ServerURL).GetPricing(ctx, "")
+	items, err := client.New(cfg.ServerURL).GetPricing(ctx, cfg.DeviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -238,4 +240,20 @@ func (a *App) SavePricing(items []client.PricingItem) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	return client.New(cfg.ServerURL).PutPricing(ctx, cfg.DeviceID, items)
+}
+
+// DeletePricing 从单价列表移除一条模型（服务端软删除；该模型再被本机使用会自动恢复）
+func (a *App) DeletePricing(agent, model string) error {
+	cfg := a.cfg.Get()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return client.New(cfg.ServerURL).DeletePricing(ctx, agent, model)
+}
+
+// PrunePricing 按本机最近 days 天实际用过的模型重建列表（其余隐藏），返回隐藏条数
+func (a *App) PrunePricing(days int) (int64, error) {
+	cfg := a.cfg.Get()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return client.New(cfg.ServerURL).PrunePricing(ctx, cfg.DeviceID, days)
 }

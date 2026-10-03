@@ -23,6 +23,24 @@ function setNet(cls, text){
   clearTimeout(b._t);
   if(cls==="ok") b._t=setTimeout(()=>{ b.className="netbanner"; }, 4000);
 }
+/* 页面内确认弹窗：mac 的 WKWebView 不实现 window.confirm（Wails 未接 WKUIDelegate，
+   confirm() 静默返回 false），导致删除类操作在 mac 上永远被取消。统一改用自绘弹窗。 */
+function askConfirm(text){
+  return new Promise(res=>{
+    const ov=document.createElement("div"); ov.className="modal-ov";
+    ov.innerHTML='<div class="modal"><div class="modal-text"></div><div class="modal-btns"><button class="btn" data-r="0">取消</button><button class="btn primary" data-r="1">确定</button></div></div>';
+    ov.querySelector(".modal-text").textContent=text;
+    const done=r=>{ ov.remove(); document.removeEventListener("keydown",key); res(!!r); };
+    const key=e=>{ if(e.key==="Escape") done(false); if(e.key==="Enter") done(true); };
+    document.addEventListener("keydown",key);
+    ov.addEventListener("click", e=>{
+      const b=e.target.closest("[data-r]"); if(b){ done(b.dataset.r==="1"); return; }
+      if(e.target===ov) done(false);
+    });
+    document.body.appendChild(ov);
+    ov.querySelector('[data-r="1"]').focus();
+  });
+}
 
 /* ---- Tabs ---- */
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
@@ -60,14 +78,14 @@ $("btnTest").onclick = async () => {
   finally{ b.disabled=false; }
 };
 $("btnNewId").onclick = async () => {
-  if(!confirm("重新生成设备标识后，服务端会把本机当成一台新设备，之前的数据留在旧标识下。确定？")) return;
+  if(!(await askConfirm("重新生成设备标识后，服务端会把本机当成一台新设备，之前的数据留在旧标识下。确定？"))) return;
   $("deviceId").value = await API().NewDeviceID();
 };
 $("btnSave").onclick = async () => {
   const b=$("btnSave"); setBusy(b,true,"正在保存并同步…"); msg("saveMsg","正在保存…");
   const c = collectServer();
   const oldId = cfg.device_id;
-  if(c.device_id!==oldId && !confirm("设备标识已修改。保存后会清空本地游标并全量重传到新标识下，确定？")){ setBusy(b,false); msg("saveMsg",""); return; }
+  if(c.device_id!==oldId && !(await askConfirm("设备标识已修改。保存后会清空本地游标并全量重传到新标识下，确定？"))){ setBusy(b,false); msg("saveMsg",""); return; }
   try{
     await API().SaveConfig(c);
     cfg = await API().GetConfig(); fillServer();
@@ -167,7 +185,7 @@ alist.addEventListener("click", async e=>{
   if(act==="remove-path") a.paths.splice(Number(btn.dataset.index),1);
   if(act==="remove-draft" && a.fresh) agentDrafts.splice(i,1);
   if(act==="remove-agent" && !a.fresh){
-    if(!confirm(`删除「${AGENT_LABEL[a.agent]||a.agent}」的采集配置？保存后服务端也会同步删除，已上报的数据不受影响。`)) return;
+    if(!(await askConfirm(`删除「${AGENT_LABEL[a.agent]||a.agent}」的采集配置？保存后服务端也会同步删除，已上报的数据不受影响。`))) return;
     agentDrafts.splice(i,1);
   }
   if(act==="probe"){ await probe(i, btn); return; }
@@ -245,24 +263,45 @@ async function loadPricing(){
     const byAgent = new Map();
     for(const p of list){ const a=byAgent.get(p.agent)||new Map(); const prov=a.get(p.provider||"other")||[]; prov.push(p); a.set(p.provider||"other",prov); byAgent.set(p.agent,a); }
     const inp=(p,f,label)=>`<label>${label}</label><input type="number" step="0.01" min="0" data-agent="${esc(p.agent)}" data-model="${esc(p.model)}" data-f="${f}" value="${p[f]??0}">`;
+    const del=p=>`<button class="btn small danger" data-del-model data-agent="${esc(p.agent)}" data-model="${esc(p.model)}" title="从列表移除该模型；历史数据保留，再被本机使用会自动恢复">删</button>`;
     let html="";
     for(const [agentName,provs] of byAgent){
       const n=[...provs.values()].reduce((s,x)=>s+x.length,0);
       html+=`<div class="phead" data-toggle="1"><span class="caret">▶</span>${esc(AGENT_LABEL[agentName]||agentName)} <span class="pcnt">${provs.size} 个服务商 / ${n} 个模型</span></div><div hidden>`;
       for(const [prov,models] of provs){
-        html+=`<div class="phead2" data-toggle="1"><span class="caret">▶</span>${esc(prov)} <span class="pcnt">${models.length} 个模型</span></div><div hidden>${models.map(p=>`<div class="prow"><span class="pname" title="${esc(p.model)}">${esc(shortModel(p.model))}${p.configured?"":' <span class="pcnt">(未配置)</span>'}</span>${inp(p,"input_per_m","输入")}${inp(p,"output_per_m","输出")}${inp(p,"cache_read_per_m","缓存读")}${inp(p,"cache_write_per_m","缓存写")}</div>`).join("")}</div>`;
+        html+=`<div class="phead2" data-toggle="1"><span class="caret">▶</span>${esc(prov)} <span class="pcnt">${models.length} 个模型</span></div><div hidden>${models.map(p=>`<div class="prow"><span class="pname" title="${esc(p.model)}">${esc(shortModel(p.model))}${p.configured?"":' <span class="pcnt">(未配置)</span>'}</span>${inp(p,"input_per_m","输入")}${inp(p,"output_per_m","输出")}${inp(p,"cache_read_per_m","缓存读")}${inp(p,"cache_write_per_m","缓存写")}${del(p)}</div>`).join("")}</div>`;
       }
       html+=`</div>`;
     }
     box.innerHTML=html;
   }catch(e){ box.innerHTML=""; msg("pricingMsg","加载失败："+(e?.message||e)+"（请先确认服务端地址正确并已保存）","bad"); }
 }
-$("pricingList").addEventListener("click", e=>{
+$("pricingList").addEventListener("click", async e=>{
+  const del=e.target.closest("[data-del-model]");
+  if(del){
+    const name=shortModel(del.dataset.model);
+    if(!(await askConfirm(`从单价列表移除「${name}」？已上报的历史数据保留，该模型再被本机使用会自动恢复。`))) return;
+    del.disabled=true;
+    try{ await API().DeletePricing(del.dataset.agent, del.dataset.model); msg("pricingMsg",`已移除「${name}」`,"ok"); loadPricing(); }
+    catch(err){ del.disabled=false; msg("pricingMsg","移除失败："+(err?.message||err),"bad"); }
+    return;
+  }
   const head=e.target.closest("[data-toggle]"); if(!head) return;
   const body=head.nextElementSibling; if(!body) return;
   const show=body.hidden; body.hidden=!show; head.querySelector(".caret")?.classList.toggle("open",show);
 });
 $("btnReloadPricing").onclick = loadPricing;
+/* 清理：只保留本机最近 30 天实际用过的模型，其余移出列表（再被使用会自动恢复） */
+$("btnPrunePricing").onclick = async () => {
+  if(!(await askConfirm("按本机最近 30 天实际用过的模型重建单价列表？长期未用的模型会被移出（再被使用会自动恢复），已设置的单价保留。"))) return;
+  const b=$("btnPrunePricing"); setBusy(b,true,"清理中…");
+  try{
+    const n = await API().PrunePricing(30);
+    msg("pricingMsg", n>0 ? `清理完成：移出 ${n} 个长期未用的模型` : "清理完成：没有需要移出的模型", "ok");
+    await loadPricing();
+  }catch(e){ msg("pricingMsg","清理失败："+(e?.message||e),"bad"); }
+  finally{ setBusy(b,false); }
+};
 $("btnSavePricing").onclick = async () => {
   const items = Object.values([...document.querySelectorAll("#pricingList input")].reduce((acc,inp)=>{
     const k=inp.dataset.agent+"\u0000"+inp.dataset.model;
@@ -290,7 +329,7 @@ function renderStatus(s){
 }
 document.querySelector("#agentStatus").addEventListener("click", async e=>{
   const b=e.target.closest("[data-reset]"); if(!b) return;
-  if(!confirm(`清空「${AGENT_LABEL[b.dataset.reset]||b.dataset.reset}」的本地游标并全量重扫？`)) return;
+  if(!(await askConfirm(`清空「${AGENT_LABEL[b.dataset.reset]||b.dataset.reset}」的本地游标并全量重扫？`))) return;
   setBusy(b,true,"排队中…");
   try{
     await API().ResetCursors(b.dataset.reset);

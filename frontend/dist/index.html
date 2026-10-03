@@ -58,9 +58,9 @@
 
 <!-- 模型单价 -->
 <section class="pane" data-pane="pricing" hidden>
-  <div class="notice">单价存在<b>服务端</b>，全局生效（¥ / 百万 Tokens，默认 0）。配置后费用 = 各类 Tokens × 单价；未配置的模型沿用 Agent 自报费用。列表是服务端已见过的所有模型（含其他设备）。</div>
+  <div class="notice">单价存在<b>服务端</b>，按 agent+model 全局生效（¥ / 百万 Tokens，默认 0）。配置后费用 = 各类 Tokens × 单价；未配置的模型沿用 Agent 自报费用。列表只显示<b>本设备</b>上报过的模型，可逐条「删」或点「清理」移出长期未用的（再被本机使用会自动恢复）。</div>
   <div id="pricingList"><div class="hint">正在加载…</div></div>
-  <div class="foot"><button class="btn primary" id="btnSavePricing">保存全部单价</button><button class="btn" id="btnReloadPricing">重新加载</button><span class="hint" id="pricingMsg"></span></div>
+  <div class="foot"><button class="btn primary" id="btnSavePricing">保存全部单价</button><button class="btn" id="btnPrunePricing">清理 30 天未用的模型</button><button class="btn" id="btnReloadPricing">重新加载</button><span class="hint" id="pricingMsg"></span></div>
 </section>
 
 <!-- 运行状态 -->

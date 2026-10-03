@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"token-monitor-client/internal/collector"
@@ -154,6 +155,21 @@ func (c *Client) GetPricing(ctx context.Context, deviceID string) ([]PricingItem
 
 func (c *Client) PutPricing(ctx context.Context, deviceID string, items []PricingItem) error {
 	return c.do(ctx, http.MethodPut, "/api/v1/pricing", map[string]any{"device_id": deviceID, "items": items}, nil)
+}
+
+// DeletePricing 软删除一条模型单价（隐藏出列表；再次上报时服务端自动恢复）
+func (c *Client) DeletePricing(ctx context.Context, agent, model string) error {
+	q := url.Values{"agent": {agent}, "model": {model}}
+	return c.do(ctx, http.MethodDelete, "/api/v1/pricing?"+q.Encode(), nil, nil)
+}
+
+// PrunePricing 按设备最近 days 天用过的模型重建列表，返回本次隐藏的条数
+func (c *Client) PrunePricing(ctx context.Context, deviceID string, days int) (int64, error) {
+	var r struct {
+		Hidden int64 `json:"hidden"`
+	}
+	err := c.do(ctx, http.MethodPost, "/api/v1/pricing/prune", map[string]any{"device_id": deviceID, "days": days}, &r)
+	return r.Hidden, err
 }
 
 // GetDeviceConfig 读取服务端保存的设备配置（配置以服务端为准）；设备从未推送过时返回 nil。
