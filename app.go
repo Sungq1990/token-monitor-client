@@ -79,15 +79,19 @@ func (a *App) startup(ctx context.Context) {
 		defer cancel()
 		_ = a.runner.Register(c)
 	}()
-	// 系统托盘（Wails 占主线程，Windows/Linux 在 goroutine 里跑消息循环）
+	// 系统托盘（Wails 占主线程；Windows/Linux 在 goroutine 里跑 systray 循环，
+	// macOS 用 NSStatusItem 在 tray_darwin.go 里自己实现）
 	go tray.Run(tray.Actions{
-		Show:  a.ShowWindow,
-		Sync:  a.SyncNow,
+		Show: a.ShowWindow,
+		Hide: func() {
+			wailsRuntime.WindowHide(ctx)
+		},
+		Sync: a.SyncNow,
 		Panel: func() {
 			// 服务端地址末尾斜杠统一规范化后再拼面板路径
 			wailsRuntime.BrowserOpenURL(ctx, strings.TrimRight(a.cfg.Get().ServerURL, "/")+"/")
 		},
-		Quit:  a.QuitApp,
+		Quit: a.QuitApp,
 	})
 }
 

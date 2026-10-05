@@ -3,7 +3,6 @@ package main
 import (
 	"embed"
 	"log"
-	"runtime"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -29,8 +28,8 @@ func main() {
 		MinWidth:    720,
 		MinHeight:   560,
 		StartHidden: cfg.StartMinimized,
-		// Windows/Linux：关窗口隐藏到托盘，采集继续；macOS：关窗口正常退出（无托盘）
-		HideWindowOnClose: runtime.GOOS != "darwin",
+		// 全平台：关窗口只隐藏到托盘，采集继续；真正退出走托盘菜单「退出」
+		HideWindowOnClose: true,
 		AssetServer:       &assetserver.Options{Assets: assets},
 		BackgroundColour:  &options.RGBA{R: 246, G: 248, B: 250, A: 1},
 		OnStartup:         app.startup,

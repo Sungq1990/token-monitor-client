@@ -14,7 +14,7 @@
   "info": {
     "companyName": "token-monitor",
     "productName": "Token Monitor",
-    "productVersion": "1.1.1",
+    "productVersion": "1.2.0",
     "copyright": "token-monitor",
     "comments": "采集本机 AI Coding Agent 的 Token 用量并上报到服务端"
   }
