@@ -51,6 +51,31 @@ func cursorMS(s string) int64 {
 	return int64(f)
 }
 
+// ocTokens 兼容新旧版 message.data 里的 token 结构（两版 tokens 对象字段一致，外层不同）。
+type ocTokens struct {
+	Input     int64 `json:"input"`
+	Output    int64 `json:"output"`
+	Reasoning int64 `json:"reasoning"`
+	Cache     struct {
+		Read  int64 `json:"read"`
+		Write int64 `json:"write"`
+	} `json:"cache"`
+}
+
+func (t ocTokens) nonzero() bool {
+	return t.Input != 0 || t.Output != 0 || t.Cache.Read != 0 || t.Cache.Write != 0 || t.Reasoning != 0
+}
+
+func (t ocTokens) total() int64 {
+	return t.Input + t.Output + t.Cache.Read + t.Cache.Write
+}
+
+func tableExists(con *sql.DB, name string) bool {
+	var n int
+	err := con.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", name).Scan(&n)
+	return err == nil && n > 0
+}
+
 func (c *openCodeCollector) collectDB(db string, cursors CursorStore) (*Batch, error) {
 	cursor := cursorMS(cursors.Get(c.name, db))
 	windowStart := cursor - int64(c.o.WindowSeconds)*1000
@@ -66,9 +91,22 @@ func (c *openCodeCollector) collectDB(db string, cursors CursorStore) (*Batch, e
 	var items []UsageItem
 	maxTC := cursor
 
+	// opencode v2.3+ 把新会话写进 session_v2 / session_message；旧表 session / message 不再增长。
+	// 两版都采，游标取最大值，互不影响（服务端按 message_id / session_id 去重）。
+	v2 := tableExists(con, "session_v2") && tableExists(con, "session_message")
+	if v2 {
+		c.collectV2(con, windowStart, &items, &maxTC)
+	}
+	c.collectV1(con, windowStart, &items, &maxTC)
+
+	return &Batch{Source: db, Cursor: strconv.FormatInt(maxTC, 10), Items: items}, nil
+}
+
+// collectV1 旧版：session + message 表。
+func (c *openCodeCollector) collectV1(con *sql.DB, windowStart int64, items *[]UsageItem, maxTC *int64) {
 	rows, err := con.Query("SELECT id, title, model, time_created, time_updated FROM session WHERE time_updated >= ?", windowStart)
 	if err != nil {
-		return nil, err
+		return
 	}
 	for rows.Next() {
 		var sid string
@@ -81,7 +119,7 @@ func (c *openCodeCollector) collectDB(db string, cursors CursorStore) (*Batch, e
 		if len(t) > 200 {
 			t = t[:200]
 		}
-		items = append(items, UsageItem{
+		*items = append(*items, UsageItem{
 			SessionID: sid, Model: model.String, SessionTitle: t,
 			SessionStartedAt: msToTime(tc.Int64), SessionLastMessageAt: msToTime(tu.Int64),
 		})
@@ -90,7 +128,7 @@ func (c *openCodeCollector) collectDB(db string, cursors CursorStore) (*Batch, e
 
 	rows, err = con.Query("SELECT id, session_id, time_created, data FROM message WHERE time_created >= ?", windowStart)
 	if err != nil {
-		return nil, err
+		return
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -101,8 +139,8 @@ func (c *openCodeCollector) collectDB(db string, cursors CursorStore) (*Batch, e
 		if err := rows.Scan(&mid, &sid, &tc, &raw); err != nil {
 			continue
 		}
-		if tc.Int64 > maxTC {
-			maxTC = tc.Int64
+		if tc.Int64 > *maxTC {
+			*maxTC = tc.Int64
 		}
 		if raw.String == "" {
 			continue
@@ -112,35 +150,97 @@ func (c *openCodeCollector) collectDB(db string, cursors CursorStore) (*Batch, e
 			ModelID    string `json:"modelID"`
 			ProviderID string `json:"providerID"`
 			Cost       *float64
-			Tokens     struct {
-				Input     int64 `json:"input"`
-				Output    int64 `json:"output"`
-				Reasoning int64 `json:"reasoning"`
-				Total     int64 `json:"total"`
-				Cache     struct {
-					Read  int64 `json:"read"`
-					Write int64 `json:"write"`
-				} `json:"cache"`
-			} `json:"tokens"`
+			Tokens     ocTokens `json:"tokens"`
 		}
 		if json.Unmarshal([]byte(raw.String), &data) != nil || data.Role != "assistant" {
 			continue
 		}
-		tk := data.Tokens
-		if tk.Input == 0 && tk.Output == 0 && tk.Cache.Read == 0 && tk.Cache.Write == 0 && tk.Reasoning == 0 {
-			continue // 没有真实 usage（进行中/失败），不估算
+		if !data.Tokens.nonzero() {
+			continue
 		}
-		total := tk.Total
-		if total == 0 {
-			total = tk.Input + tk.Output + tk.Cache.Read + tk.Cache.Write
-		}
-		items = append(items, UsageItem{
+		*items = append(*items, UsageItem{
 			MessageID: mid, SessionID: sid.String, Model: data.ModelID, Provider: data.ProviderID,
-			InputTokens: tk.Input, OutputTokens: tk.Output, CacheReadTokens: tk.Cache.Read, CacheWriteTokens: tk.Cache.Write,
-			ReasoningTokens: tk.Reasoning, TotalTokens: total, Cost: data.Cost, OccurredAt: msToTime(tc.Int64),
+			InputTokens: data.Tokens.Input, OutputTokens: data.Tokens.Output, CacheReadTokens: data.Tokens.Cache.Read, CacheWriteTokens: data.Tokens.Cache.Write,
+			ReasoningTokens: data.Tokens.Reasoning, TotalTokens: data.Tokens.total(), Cost: data.Cost, OccurredAt: msToTime(tc.Int64),
 		})
 	}
-	return &Batch{Source: db, Cursor: strconv.FormatInt(maxTC, 10), Items: items}, nil
+}
+
+// collectV2 opencode v2.3+：session_v2 + session_message 表。
+func (c *openCodeCollector) collectV2(con *sql.DB, windowStart int64, items *[]UsageItem, maxTC *int64) {
+	// 会话元信息：model 是 JSON 字符串 {"id":...,"providerID":...}
+	rows, err := con.Query("SELECT id, title, model, time_created, time_updated FROM session_v2 WHERE time_updated >= ?", windowStart)
+	if err != nil {
+		return
+	}
+	for rows.Next() {
+		var sid string
+		var title, modelRaw sql.NullString
+		var tc, tu sql.NullInt64
+		if err := rows.Scan(&sid, &title, &modelRaw, &tc, &tu); err != nil {
+			continue
+		}
+		t := title.String
+		if len(t) > 200 {
+			t = t[:200]
+		}
+		var model, provider string
+		if modelRaw.String != "" {
+			var m struct {
+				ID         string `json:"id"`
+				ProviderID string `json:"providerID"`
+			}
+			if json.Unmarshal([]byte(modelRaw.String), &m) == nil {
+				model, provider = m.ID, m.ProviderID
+			}
+		}
+		*items = append(*items, UsageItem{
+			SessionID: sid, Model: model, Provider: provider, SessionTitle: t,
+			SessionStartedAt: msToTime(tc.Int64), SessionLastMessageAt: msToTime(tu.Int64),
+		})
+	}
+	rows.Close()
+
+	// usage：type='assistant'，tokens 在 data 顶层（无 role 字段，用表列 type 判断）
+	rows, err = con.Query("SELECT id, session_id, time_created, data FROM session_message WHERE time_created >= ? AND type='assistant'", windowStart)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var mid string
+		var sid sql.NullString
+		var tc sql.NullInt64
+		var raw sql.NullString
+		if err := rows.Scan(&mid, &sid, &tc, &raw); err != nil {
+			continue
+		}
+		if tc.Int64 > *maxTC {
+			*maxTC = tc.Int64
+		}
+		if raw.String == "" {
+			continue
+		}
+		var data struct {
+			Cost   *float64 `json:"cost"`
+			Model  struct {
+				ID         string `json:"id"`
+				ProviderID string `json:"providerID"`
+			} `json:"model"`
+			Tokens ocTokens `json:"tokens"`
+		}
+		if json.Unmarshal([]byte(raw.String), &data) != nil {
+			continue
+		}
+		if !data.Tokens.nonzero() {
+			continue
+		}
+		*items = append(*items, UsageItem{
+			MessageID: mid, SessionID: sid.String, Model: data.Model.ID, Provider: data.Model.ProviderID,
+			InputTokens: data.Tokens.Input, OutputTokens: data.Tokens.Output, CacheReadTokens: data.Tokens.Cache.Read, CacheWriteTokens: data.Tokens.Cache.Write,
+			ReasoningTokens: data.Tokens.Reasoning, TotalTokens: data.Tokens.total(), Cost: data.Cost, OccurredAt: msToTime(tc.Int64),
+		})
+	}
 }
 
 // ---- ZCode：cli/db/db.sqlite 的 session 表 + model_usage 表 ----
