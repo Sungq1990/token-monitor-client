@@ -13,11 +13,12 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// ---- SQLite 只读打开：原生路径直接 mode=ro；打不开（如 WAL + 网络盘/UNC）时用「源未变化则复用」的本地快照 ----
+// ---- SQLite 只读打开：优先 immutable=1 直开原路径（零复制、零额外磁盘）；失败才回退本地快照 ----
 //
 // 性能要点（\\wsl.localhost 等 9P 路径整库拷贝很慢）：
-//   - UNC 路径（\\开头）跳过直开尝试（WAL 库在 9P 上必失败，且 busy_timeout 会白等）；
-//   - 快照按「主库文件」和「-wal」分开记签名：主库没变（没 checkpoint）时只补拷 wal，避免每轮整库重拷。
+//   - immutable=1 跳过加锁与 WAL，直接读主库文件；9P/UNC 上不复制、不留副本；
+//   - 代价：读不到 WAL 中尚未 checkpoint 的最新数据，由采集器的 RescanWindowSeconds 重扫窗口兜底；
+//   - 快照仅作兜底（immutable 直开失败时），按主库/-wal 分开记签名：主库没变时只补拷 wal。
 
 type snapshot struct {
 	dir     string
@@ -42,23 +43,32 @@ func isUNC(p string) bool {
 }
 
 func openSQLiteRO(db string) (*sql.DB, error) {
-	dsn := func(p string) string {
-		// SQLite URI：Windows 绝对路径需要 file:///C:/...，其余平台 file:/abs/path
-		u := "file:" + filepath.ToSlash(p)
-		if runtime.GOOS == "windows" && len(p) > 1 && p[1] == ':' {
-			u = "file:///" + filepath.ToSlash(p)
+	// dsn 构造 SQLite URI。immutable=1 跳过加锁与 WAL，直接读主库文件；
+	// UNC 需 file:////host/share/...（4 斜杠），Windows 盘符需 file:///C:/...。
+	dsn := func(p string, immutable bool) string {
+		sl := filepath.ToSlash(p)
+		var u string
+		switch {
+		case isUNC(p):
+			u = "file://" + sl
+		case runtime.GOOS == "windows" && len(p) > 1 && p[1] == ':':
+			u = "file:///" + sl
+		default:
+			u = "file:" + sl
+		}
+		if immutable {
+			return u + "?immutable=1&mode=ro&_pragma=query_only(1)"
 		}
 		return u + "?mode=ro&_pragma=busy_timeout(5000)&_pragma=query_only(1)"
 	}
-	// UNC/网络路径上的 WAL 库直开必然失败且开销大，直接走快照
-	if !isUNC(db) {
-		if con, err := sql.Open("sqlite", dsn(db)); err == nil {
-			var n int
-			if err := con.QueryRow("select count(*) from sqlite_master").Scan(&n); err == nil {
-				return con, nil
-			}
-			con.Close()
+	// 优先 immutable 直开：零复制、不留副本，UNC/9P 路径也能读。
+	// 验证查询失败才继续走下面的快照兜底。
+	if con, err := sql.Open("sqlite", dsn(db, true)); err == nil {
+		var n int
+		if err := con.QueryRow("select count(*) from sqlite_master").Scan(&n); err == nil {
+			return con, nil
 		}
+		con.Close()
 	}
 
 	base := filepath.Base(db)
@@ -78,7 +88,7 @@ func openSQLiteRO(db string) (*sql.DB, error) {
 					cached.walSig = walSig
 				}
 			}
-			return sql.Open("sqlite", dsn(target))
+			return sql.Open("sqlite", dsn(target, false))
 		}
 	}
 
@@ -101,7 +111,7 @@ func openSQLiteRO(db string) (*sql.DB, error) {
 		_ = copyFile(db+"-shm", target+"-shm")
 	}
 	snapshots[db] = &snapshot{dir: dir, mainSig: mainSig, walSig: walSig}
-	con, err := sql.Open("sqlite", dsn(target))
+	con, err := sql.Open("sqlite", dsn(target, false))
 	if err != nil {
 		return nil, err
 	}
